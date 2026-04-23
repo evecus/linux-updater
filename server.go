@@ -58,6 +58,9 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		tasks := s.store.ListTasks()
+		if tasks == nil {
+			tasks = []*Task{}
+		}
 		sort.Slice(tasks, func(i, j int) bool {
 			return tasks[i].Name < tasks[j].Name
 		})
@@ -219,5 +222,6 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 // GET / -> serve embedded HTML panel
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	w.Write([]byte(indexHTML))
 }

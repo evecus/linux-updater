@@ -257,10 +257,22 @@
 
   // ---- Load tasks ----
   function loadTasks(){
-    api('GET','/api/tasks').then(function(data){
-      tasks=Array.isArray(data)?data:[];
-      renderTasks();
-    }).catch(function(e){toast(e.message,'error');});
+    fetch('/api/tasks?_='+Date.now())
+      .then(function(r){return r.json();})
+      .then(function(data){
+        if(Array.isArray(data)){
+          tasks=data;
+        } else if(data&&typeof data==='object'&&!data.error){
+          tasks=Object.values(data);
+        } else {
+          tasks=[];
+        }
+        renderTasks();
+      })
+      .catch(function(e){
+        console.error('loadTasks error',e);
+        toast('加载任务失败: '+e.message,'error');
+      });
   }
 
   function statusLabel(s){

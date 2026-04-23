@@ -175,6 +175,7 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 		}
 		s.store.UpdateTaskField(t.ID, func(tk *Task) {
 			tk.LastCheck = time.Now()
+			tk.LatestVersion = result.LatestVersion
 			if result.HasUpdate {
 				tk.Status = "update_available"
 				tk.LastError = ""

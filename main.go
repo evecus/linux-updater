@@ -28,9 +28,6 @@ func main() {
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		log.Fatalf("failed to create data dir: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(dataDir, "logs"), 0755); err != nil {
-		log.Fatalf("failed to create logs dir: %v", err)
-	}
 
 	store := NewStore(dataDir)
 	if err := store.Load(); err != nil {

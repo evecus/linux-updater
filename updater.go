@@ -88,6 +88,11 @@ func RunUpdate(task *Task, store *Store) {
 		return
 	}
 
+	// Always save the latest version we learned about
+	store.UpdateTaskField(task.ID, func(t *Task) {
+		t.LatestVersion = result.LatestVersion
+	})
+
 	if !result.HasUpdate {
 		logger(fmt.Sprintf("✅ already up-to-date (%s)", result.CurrentVersion))
 		setStatus("ok", "")

@@ -23,6 +23,7 @@ type Task struct {
 	UpdateType     UpdateType `json:"update_type"`
 	RepoURL        string     `json:"repo_url"`   // https://github.com/owner/repo
 	CurrentVersion string     `json:"current_version"`
+	LatestVersion  string     `json:"latest_version"`
 	FileKeyword    string     `json:"file_keyword"`
 	Rename         string     `json:"rename"`      // optional
 	TargetPath     string     `json:"target_path"` // absolute path
@@ -126,7 +127,7 @@ func (s *Store) UpdateTaskField(id string, fn func(*Task)) error {
 	return s.save()
 }
 
-// LogPath returns the log file path for a task.
+// LogPath returns the log file path for a task (stored in /tmp for runtime logs).
 func (s *Store) LogPath(taskID string) string {
-	return filepath.Join(s.dataDir, "logs", taskID+".log")
+	return filepath.Join("/tmp", "updater-log-"+taskID+".log")
 }

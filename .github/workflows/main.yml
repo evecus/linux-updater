@@ -34,7 +34,7 @@ jobs:
         run: |
           ARCH_TAG="${{ matrix.goarch }}"
           [ "${{ matrix.goarm }}" != "" ] && ARCH_TAG="armv${{ matrix.goarm }}"
-          OUTPUT="linux-updater-${GOOS}-${ARCH_TAG}"
+          OUTPUT="updater-${GOOS}-${ARCH_TAG}"
           go build -ldflags="-s -w" -trimpath -o "$OUTPUT" .
           echo "OUTPUT=$OUTPUT" >> $GITHUB_ENV
 

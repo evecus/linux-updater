@@ -95,7 +95,8 @@ func hasPrefix(b []byte, hex string) bool {
 // ExtractAndFindBinary extracts the downloaded file and returns the path to
 // the best candidate executable inside it.
 // repoName is used as a hint when multiple executables are present.
-func ExtractAndFindBinary(filePath, repoName string, logger func(string)) (string, error) {
+// binaryKeyword, if non-empty, is used to break ties when multiple ELF binaries exist.
+func ExtractAndFindBinary(filePath, repoName, binaryKeyword string, logger func(string)) (string, error) {
 	magic, err := magicBytes(filePath)
 	if err != nil {
 		return "", err
@@ -152,11 +153,12 @@ func ExtractAndFindBinary(filePath, repoName string, logger func(string)) (strin
 		}
 	}
 
-	return findBinary(extractDir, repoName, logger)
+	return findBinary(extractDir, repoName, binaryKeyword, logger)
 }
 
 // findBinary walks extractDir and picks the best executable candidate.
-func findBinary(dir, hint string, logger func(string)) (string, error) {
+// binaryKeyword, if non-empty, is only used as a tiebreaker when multiple ELF binaries exist.
+func findBinary(dir, hint, binaryKeyword string, logger func(string)) (string, error) {
 	type candidate struct {
 		path string
 		size int64
@@ -210,6 +212,29 @@ func findBinary(dir, hint string, logger func(string)) (string, error) {
 		}
 		return candidates[i].size > candidates[j].size
 	})
+
+	// Count how many top-tier ELF candidates share the same prio as the best
+	bestPrio := candidates[0].prio
+	var elfTies []candidate
+	for _, c := range candidates {
+		magic, _ := magicBytes(c.path)
+		if c.prio == bestPrio && hasPrefix(magic, "7f454c46") {
+			elfTies = append(elfTies, c)
+		}
+	}
+
+	// Only apply binaryKeyword when there are multiple ELF binaries at the top
+	if binaryKeyword != "" && len(elfTies) > 1 {
+		kwLow := strings.ToLower(binaryKeyword)
+		for _, c := range elfTies {
+			name := strings.ToLower(filepath.Base(c.path))
+			if strings.Contains(name, kwLow) {
+				logger(fmt.Sprintf("🔍 selected binary (by keyword \"%s\"): %s", binaryKeyword, filepath.Base(c.path)))
+				return c.path, nil
+			}
+		}
+		logger(fmt.Sprintf("⚠ binary_keyword \"%s\" matched nothing, falling back to default selection", binaryKeyword))
+	}
 
 	chosen := candidates[0].path
 	logger(fmt.Sprintf("🔍 selected binary: %s", filepath.Base(chosen)))

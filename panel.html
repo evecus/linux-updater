@@ -54,9 +54,7 @@
   .repo-link{color:var(--accent);text-decoration:none;font-size:.75rem}.repo-link:hover{text-decoration:underline}
   .cron-tag{font-size:.72rem;background:rgba(108,99,255,.1);color:var(--accent);padding:1px 6px;border-radius:4px;font-family:monospace}
   .last-time{font-size:.72rem;color:var(--text2)}
-  .empty-state{text-align:center;padding:80px 20px;color:var(--text2)}
-  .empty-state .icon{font-size:3.5rem;margin-bottom:14px}
-  .empty-state p{font-size:.95rem;margin-bottom:6px;color:var(--text)}
+
   .modal-bg{position:fixed;inset:0;background:rgba(15,23,42,.45);backdrop-filter:blur(3px);z-index:200;display:flex;align-items:center;justify-content:center;padding:16px}
   .modal-bg.hidden{display:none}
   .modal{background:var(--card);border:1px solid var(--border);border-radius:16px;width:100%;max-width:600px;max-height:92vh;overflow-y:auto;box-shadow:var(--shadow-lg)}
@@ -105,11 +103,7 @@
 
 <main>
   <div class="grid" id="taskGrid"></div>
-  <div id="emptyState" class="empty-state hidden">
-    <div class="icon">&#x1F4E6;</div>
-    <p>暂无更新任务</p>
-    <small>点击右上角「添加任务」开始配置</small>
-  </div>
+
 </main>
 
 <!-- Add/Edit Modal -->
@@ -159,6 +153,11 @@
           <input id="fTarget" placeholder="/usr/local/bin">
           <div class="hint">绝对路径，目录不存在会自动创建</div>
         </div>
+      </div>
+      <div class="form-group" id="fBinaryKeywordRow">
+        <label>核心关键词</label>
+        <input id="fBinaryKeyword" placeholder="例如：frpc">
+        <div class="hint">压缩包内有多个二进制文件时，用于指定选哪个（留空则自动判断）</div>
       </div>
       <hr class="divider">
       <div class="form-group">
@@ -303,9 +302,8 @@
   }
 
   function renderTasks(){
-    var grid=g('taskGrid'),empty=g('emptyState');
-    if(!tasks||!tasks.length){grid.innerHTML='';empty.classList.remove('hidden');return;}
-    empty.classList.add('hidden');
+    var grid=g('taskGrid');
+    if(!tasks||!tasks.length){grid.innerHTML='';return;}
     grid.innerHTML=tasks.map(function(t){
       var isCore=t.update_type==='core';
       var barColor=isCore?'#6c63ff':'#10b981';
@@ -381,8 +379,9 @@
   // ---- Modal ----
   window.openModal=function(){
     editID=null;g('modalTitle').textContent='添加任务';
-    ['fName','fRepo','fVersion','fKeyword','fRename','fTarget','fPre','fPost','fCron'].forEach(function(id){g(id).value='';});
+    ['fName','fRepo','fVersion','fKeyword','fRename','fTarget','fPre','fPost','fCron','fBinaryKeyword'].forEach(function(id){g(id).value='';});
     g('fType').value='core';g('modalBg').classList.remove('hidden');
+    updateBinaryKeywordVisibility();
   };
   window._editTask=function(id){
     var t=null;for(var i=0;i<tasks.length;i++){if(tasks[i].id===id){t=tasks[i];break;}}if(!t)return;
@@ -390,7 +389,9 @@
     g('fName').value=t.name||'';g('fType').value=t.update_type||'core';g('fRepo').value=t.repo_url||'';
     g('fVersion').value=t.current_version||'';g('fKeyword').value=t.file_keyword||'';g('fRename').value=t.rename||'';
     g('fTarget').value=t.target_path||'';g('fPre').value=t.pre_cmd||'';g('fPost').value=t.post_cmd||'';g('fCron').value=t.cron||'';
+    g('fBinaryKeyword').value=t.binary_keyword||'';
     g('modalBg').classList.remove('hidden');
+    updateBinaryKeywordVisibility();
   };
   window.closeModal=function(){g('modalBg').classList.add('hidden');};
 
@@ -400,7 +401,7 @@
     if(!repo){toast('请填写 GitHub 项目地址','error');return;}
     if(!keyword){toast('请填写下载文件关键词','error');return;}
     if(!target){toast('请填写文件放置路径','error');return;}
-    var body={name:name,repo_url:repo,update_type:g('fType').value,current_version:g('fVersion').value.trim(),file_keyword:keyword,rename:g('fRename').value.trim(),target_path:target,pre_cmd:g('fPre').value.trim(),post_cmd:g('fPost').value.trim(),cron:g('fCron').value.trim()};
+    var body={name:name,repo_url:repo,update_type:g('fType').value,current_version:g('fVersion').value.trim(),file_keyword:keyword,binary_keyword:g('fBinaryKeyword').value.trim(),rename:g('fRename').value.trim(),target_path:target,pre_cmd:g('fPre').value.trim(),post_cmd:g('fPost').value.trim(),cron:g('fCron').value.trim()};
     var method=editID?'PUT':'POST',path=editID?'/api/tasks/'+editID:'/api/tasks';
     api(method,path,body).then(function(){toast(editID?'已保存':'任务已创建','success');closeModal();loadTasks();}).catch(function(e){toast(e.message,'error');});
   };
@@ -425,6 +426,11 @@
       .replace(/(&#x2B07;[^\n]*|&#x1F4E6;[^\n]*|&#x1F50D;[^\n]*|&#x1F4CB;[^\n]*|&#x1F4C2;[^\n]*|&#x2699;[^\n]*)/g,'<span class="log-info">$1</span>')
       .replace(/(&#x26A0;[^\n]*|&#x1F195;[^\n]*)/g,'<span class="log-warn">$1</span>');
   }
+
+  function updateBinaryKeywordVisibility(){
+    g('fBinaryKeywordRow').style.display=g('fType').value==='core'?'':'none';
+  }
+  g('fType').addEventListener('change',updateBinaryKeywordVisibility);
 
   g('modalBg').addEventListener('click',function(e){if(e.target===g('modalBg'))closeModal();});
   g('logModalBg').addEventListener('click',function(e){if(e.target===g('logModalBg'))closeLogModal();});

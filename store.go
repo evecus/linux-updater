@@ -25,6 +25,7 @@ type Task struct {
 	CurrentVersion string     `json:"current_version"`
 	LatestVersion  string     `json:"latest_version"`
 	FileKeyword    string     `json:"file_keyword"`
+	BinaryKeyword  string     `json:"binary_keyword"` // optional: pick specific binary from archive (core type only)
 	Rename         string     `json:"rename"`      // optional
 	TargetPath     string     `json:"target_path"` // absolute path
 	PreCmd         string     `json:"pre_cmd"`

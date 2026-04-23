@@ -117,7 +117,7 @@ func RunUpdate(task *Task, store *Store) {
 		// Extract and find the binary
 		owner, repo, _ := ParseOwnerRepo(task.RepoURL)
 		_ = owner
-		binaryPath, err := ExtractAndFindBinary(tmpFile, repo, logger)
+		binaryPath, err := ExtractAndFindBinary(tmpFile, repo, task.BinaryKeyword, logger)
 		if err != nil {
 			logger(fmt.Sprintf("❌ extract failed: %v", err))
 			setStatus("error", err.Error())

@@ -53,8 +53,22 @@ jobs:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    # 修改：如果是 tag 触发 OR 手动触发，则执行
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    
     steps:
+      - name: Generate Tag Name
+        id: tag_gen
+        run: |
+          # 如果是 tag 触发，使用原有 tag；如果是手动触发，生成时间戳 tag
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG_NAME="${github_ref#refs/tags/}"
+          else
+            # 生成格式为 2026.04.23-0138 的时间戳
+            TAG_NAME="manual-$(date +'%Y.%m.%d-%H%M')"
+          fi
+          echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -63,5 +77,8 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          # 使用上面生成的动态 Tag
+          tag_name: ${{ steps.tag_gen.outputs.tag }}
+          name: Release ${{ steps.tag_gen.outputs.tag }}
           files: dist/*
           generate_release_notes: true

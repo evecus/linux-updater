@@ -36,6 +36,7 @@
   .type-badge{font-size:.68rem;padding:2px 7px;border-radius:20px;font-weight:600;letter-spacing:.3px}
   .badge-core{background:rgba(108,99,255,.12);color:#6c63ff}
   .badge-file{background:rgba(16,185,129,.12);color:#10b981}
+  .badge-package{background:rgba(245,158,11,.12);color:#f59e0b}
   .card-body{display:grid;gap:7px;margin-bottom:14px}
   .info-row{display:flex;align-items:center;gap:8px;font-size:.82rem}
   .info-label{color:var(--text2);min-width:62px;flex-shrink:0;font-size:.78rem}
@@ -124,6 +125,7 @@
           <select id="fType">
             <option value="core">核心（可执行文件）</option>
             <option value="file">文件（原样替换）</option>
+            <option value="package">安装包（deb/rpm/pkg）</option>
           </select>
         </div>
       </div>
@@ -143,7 +145,7 @@
           <div class="hint">空格分隔多个关键词，模糊匹配评分</div>
         </div>
       </div>
-      <div class="form-row">
+      <div id="fRenameTargetRow" class="form-row">
         <div class="form-group">
           <label>文件/核心重命名</label>
           <input id="fRename" placeholder="留空则保持原文件名">
@@ -306,25 +308,31 @@
     if(!tasks||!tasks.length){grid.innerHTML='';return;}
     grid.innerHTML=tasks.map(function(t){
       var isCore=t.update_type==='core';
-      var barColor=isCore?'#6c63ff':'#10b981';
+      var isPkg=t.update_type==='package';
+      var barColor=isCore?'#6c63ff':(isPkg?'#f59e0b':'#10b981');
+      var badgeCls=isCore?'badge-core':(isPkg?'badge-package':'badge-file');
+      var badgeLabel=isCore?'CORE':(isPkg?'PKG':'FILE');
       var dotCls='dot-'+(t.status||'idle');
-      var cronHtml=t.cron?'<div class="info-row"><span class="info-label">定时</span><span class="cron-tag">'+escHtml(t.cron)+'</span></div>':'';
       var errHtml=t.last_error?'<span style="color:var(--danger);font-size:.72rem"> &mdash; '+escHtml(t.last_error.substring(0,60))+'</span>':'';
       var updTime=(t.last_update&&t.last_update!=='0001-01-01T00:00:00Z')?'<span class="info-label" style="margin-left:6px">更新</span><span class="last-time">'+timeFmt(t.last_update)+'</span>':'';
       var cur=escHtml(t.current_version||'');
       var lat=escHtml(t.latest_version||'');
+      // Target path and keyword rows - hidden for package type
+      var targetRow=isPkg
+        ?'<div class="info-row"><span class="info-label">目标路径</span><span class="info-val" style="color:var(--text2)">无</span></div>'
+        :'<div class="info-row"><span class="info-label">目标路径</span><span class="info-val" title="'+escHtml(t.target_path||'')+'">'+escHtml(t.target_path||'')+'</span></div>';
       return '<div class="card" id="card-'+t.id+'">'
         +'<div class="card-top-bar" style="background:'+barColor+'"></div>'
         +'<div class="card-header">'
-        +'<div><div class="card-title">'+escHtml(t.name)+'<span class="type-badge '+(isCore?'badge-core':'badge-file')+'">'+(isCore?'CORE':'FILE')+'</span></div>'
+        +'<div><div class="card-title">'+escHtml(t.name)+'<span class="type-badge '+badgeCls+'">'+badgeLabel+'</span></div>'
         +'<a class="repo-link" href="'+escHtml(t.repo_url)+'" target="_blank">&#x2197; '+escHtml(repoShort(t.repo_url))+'</a></div>'
         +'<button class="btn btn-ghost btn-sm" onclick="window._editTask(\''+t.id+'\')" title="编辑">&#x270F;&#xFE0F;</button>'
         +'</div>'
         +'<div class="card-body">'
         +renderVersions(t.current_version,t.latest_version)
-        +'<div class="info-row"><span class="info-label">目标路径</span><span class="info-val" title="'+escHtml(t.target_path)+'">'+escHtml(t.target_path)+'</span></div>'
+        +targetRow
         +'<div class="info-row"><span class="info-label">关键词</span><span class="info-val">'+escHtml(t.file_keyword)+'</span></div>'
-        +'<div class="info-row"><span class="info-label">定时</span>'+(t.cron?'<span class="cron-tag">'+escHtml(t.cron)+'</span>':'<span class="info-val" style="color:var(--text2)">无</span>')+'</div>'  
+        +'<div class="info-row"><span class="info-label">定时</span>'+(t.cron?'<span class="cron-tag">'+escHtml(t.cron)+'</span>':'<span class="info-val" style="color:var(--text2)">无</span>')+'</div>'
         +'<div class="info-row"><div class="status-dot '+dotCls+'"></div><span class="info-val">'+statusLabel(t.status||'idle')+errHtml+'</span></div>'
         +'<div class="info-row"><span class="info-label">上次检测</span><span class="last-time">'+timeFmt(t.last_check)+'</span>'+updTime+'</div>'
         +'</div>'
@@ -381,7 +389,7 @@
     editID=null;g('modalTitle').textContent='添加任务';
     ['fName','fRepo','fVersion','fKeyword','fRename','fTarget','fPre','fPost','fCron','fBinaryKeyword'].forEach(function(id){g(id).value='';});
     g('fType').value='core';g('modalBg').classList.remove('hidden');
-    updateBinaryKeywordVisibility();
+    updateTypeVisibility();
   };
   window._editTask=function(id){
     var t=null;for(var i=0;i<tasks.length;i++){if(tasks[i].id===id){t=tasks[i];break;}}if(!t)return;
@@ -391,17 +399,19 @@
     g('fTarget').value=t.target_path||'';g('fPre').value=t.pre_cmd||'';g('fPost').value=t.post_cmd||'';g('fCron').value=t.cron||'';
     g('fBinaryKeyword').value=t.binary_keyword||'';
     g('modalBg').classList.remove('hidden');
-    updateBinaryKeywordVisibility();
+    updateTypeVisibility();
   };
   window.closeModal=function(){g('modalBg').classList.add('hidden');};
 
   window.saveTask=function(){
     var name=g('fName').value.trim(),repo=g('fRepo').value.trim(),keyword=g('fKeyword').value.trim(),target=g('fTarget').value.trim();
+    var type=g('fType').value;
+    var isPkg=type==='package';
     if(!name){toast('请填写任务名称','error');return;}
     if(!repo){toast('请填写 GitHub 项目地址','error');return;}
     if(!keyword){toast('请填写下载文件关键词','error');return;}
-    if(!target){toast('请填写文件放置路径','error');return;}
-    var body={name:name,repo_url:repo,update_type:g('fType').value,current_version:g('fVersion').value.trim(),file_keyword:keyword,binary_keyword:g('fBinaryKeyword').value.trim(),rename:g('fRename').value.trim(),target_path:target,pre_cmd:g('fPre').value.trim(),post_cmd:g('fPost').value.trim(),cron:g('fCron').value.trim()};
+    if(!isPkg&&!target){toast('请填写文件放置路径','error');return;}
+    var body={name:name,repo_url:repo,update_type:type,current_version:g('fVersion').value.trim(),file_keyword:keyword,binary_keyword:g('fBinaryKeyword').value.trim(),rename:g('fRename').value.trim(),target_path:target,pre_cmd:g('fPre').value.trim(),post_cmd:g('fPost').value.trim(),cron:g('fCron').value.trim()};
     var method=editID?'PUT':'POST',path=editID?'/api/tasks/'+editID:'/api/tasks';
     api(method,path,body).then(function(){toast(editID?'已保存':'任务已创建','success');closeModal();loadTasks();}).catch(function(e){toast(e.message,'error');});
   };
@@ -427,10 +437,14 @@
       .replace(/(&#x26A0;[^\n]*|&#x1F195;[^\n]*)/g,'<span class="log-warn">$1</span>');
   }
 
-  function updateBinaryKeywordVisibility(){
-    g('fBinaryKeywordRow').style.display=g('fType').value==='core'?'':'none';
+  function updateTypeVisibility(){
+    var type=g('fType').value;
+    var isPkg=type==='package';
+    var isCore=type==='core';
+    g('fRenameTargetRow').style.display=isPkg?'none':'';
+    g('fBinaryKeywordRow').style.display=isCore?'':'none';
   }
-  g('fType').addEventListener('change',updateBinaryKeywordVisibility);
+  g('fType').addEventListener('change',updateTypeVisibility);
 
   g('modalBg').addEventListener('click',function(e){if(e.target===g('modalBg'))closeModal();});
   g('logModalBg').addEventListener('click',function(e){if(e.target===g('logModalBg'))closeLogModal();});

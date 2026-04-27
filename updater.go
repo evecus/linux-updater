@@ -111,6 +111,58 @@ func RunUpdate(task *Task, store *Store) {
 	}
 	defer os.Remove(tmpFile)
 
+	// ---- Package type: download and install via system package manager ----
+	if task.UpdateType == UpdateTypePackage {
+		// Pre-update command
+		if task.PreCmd != "" {
+			logger(fmt.Sprintf("⚙ running pre-update: %s", task.PreCmd))
+			if out, err := runShell(task.PreCmd); err != nil {
+				logger(fmt.Sprintf("❌ pre-update failed: %v\n%s", err, out))
+				setStatus("error", fmt.Sprintf("pre-cmd: %v", err))
+				return
+			} else if out != "" {
+				logger("pre-update output: " + out)
+			}
+		}
+
+		pkgMgr, installCmd, err := detectPackageManager(tmpFile, logger)
+		if err != nil {
+			logger(fmt.Sprintf("❌ package manager detection failed: %v", err))
+			setStatus("error", err.Error())
+			return
+		}
+		logger(fmt.Sprintf("📦 detected package manager: %s", pkgMgr))
+		logger(fmt.Sprintf("⚙ installing: %s", installCmd))
+		if out, err := runShell(installCmd); err != nil {
+			logger(fmt.Sprintf("❌ install failed: %v\n%s", err, out))
+			setStatus("error", fmt.Sprintf("install: %v", err))
+			return
+		} else if out != "" {
+			logger("install output: " + out)
+		}
+		logger("✅ package installed successfully")
+
+		// Post-update command
+		if task.PostCmd != "" {
+			logger(fmt.Sprintf("⚙ running post-update: %s", task.PostCmd))
+			if out, err := runShell(task.PostCmd); err != nil {
+				logger(fmt.Sprintf("⚠ post-update failed: %v\n%s", err, out))
+			} else if out != "" {
+				logger("post-update output: " + out)
+			}
+		}
+
+		store.UpdateTaskField(task.ID, func(t *Task) {
+			t.CurrentVersion = result.LatestVersion
+			t.LastUpdate = time.Now()
+			t.LastCheck = time.Now()
+			t.Status = "ok"
+			t.LastError = ""
+		})
+		logger(fmt.Sprintf("🎉 updated to %s", result.LatestVersion))
+		return
+	}
+
 	var deployFile string
 
 	if task.UpdateType == UpdateTypeCore {
@@ -227,6 +279,70 @@ func RunUpdate(task *Task, store *Store) {
 		t.LastError = ""
 	})
 	logger(fmt.Sprintf("🎉 updated to %s", result.LatestVersion))
+}
+
+// detectPackageManager checks the downloaded file extension and available
+// package managers on the system, then returns an install command.
+func detectPackageManager(pkgFile string, logger func(string)) (string, string, error) {
+	lower := strings.ToLower(pkgFile)
+
+	// Determine package format from file extension
+	switch {
+	case strings.HasSuffix(lower, ".deb"):
+		// Prefer apt/apt-get for .deb
+		for _, mgr := range [][]string{
+			{"apt", "apt install -y " + pkgFile},
+			{"apt-get", "apt-get install -y " + pkgFile},
+			{"dpkg", "dpkg -i " + pkgFile},
+		} {
+			if commandExists(mgr[0]) {
+				return mgr[0], mgr[1], nil
+			}
+		}
+		return "", "", fmt.Errorf("no suitable package manager found for .deb (tried apt, apt-get, dpkg)")
+
+	case strings.HasSuffix(lower, ".rpm"):
+		// Prefer dnf/yum/rpm for .rpm
+		for _, mgr := range [][]string{
+			{"dnf", "dnf install -y " + pkgFile},
+			{"yum", "yum install -y " + pkgFile},
+			{"zypper", "zypper --non-interactive install " + pkgFile},
+			{"rpm", "rpm -Uvh " + pkgFile},
+		} {
+			if commandExists(mgr[0]) {
+				return mgr[0], mgr[1], nil
+			}
+		}
+		return "", "", fmt.Errorf("no suitable package manager found for .rpm (tried dnf, yum, zypper, rpm)")
+
+	case strings.HasSuffix(lower, ".pkg.tar.zst") ||
+		strings.HasSuffix(lower, ".pkg.tar.xz") ||
+		strings.HasSuffix(lower, ".pkg.tar.gz"):
+		if commandExists("pacman") {
+			return "pacman", "pacman -U --noconfirm " + pkgFile, nil
+		}
+		return "", "", fmt.Errorf("pacman not found; cannot install .pkg.tar.* package")
+
+	default:
+		// Unknown extension — try to auto-detect from system
+		logger("⚠ file extension not recognised, probing system package managers…")
+		if commandExists("apt") {
+			return "apt", "apt install -y " + pkgFile, nil
+		}
+		if commandExists("dnf") {
+			return "dnf", "dnf install -y " + pkgFile, nil
+		}
+		if commandExists("pacman") {
+			return "pacman", "pacman -U --noconfirm " + pkgFile, nil
+		}
+		return "", "", fmt.Errorf("cannot determine package format or package manager for file: %s", filepath.Base(pkgFile))
+	}
+}
+
+// commandExists returns true if cmd is found in PATH.
+func commandExists(cmd string) bool {
+	_, err := exec.LookPath(cmd)
+	return err == nil
 }
 
 func runShell(cmd string) (string, error) {

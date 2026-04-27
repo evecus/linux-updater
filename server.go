@@ -72,8 +72,8 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 400, map[string]string{"error": err.Error()})
 			return
 		}
-		if t.RepoURL == "" || t.FileKeyword == "" || t.TargetPath == "" {
-			writeJSON(w, 400, map[string]string{"error": "repo_url, file_keyword and target_path are required"})
+		if t.RepoURL == "" || t.FileKeyword == "" || (t.UpdateType != UpdateTypePackage && t.TargetPath == "") {
+			writeJSON(w, 400, map[string]string{"error": "repo_url and file_keyword are required; target_path is required for core/file types"})
 			return
 		}
 		if t.ID == "" {

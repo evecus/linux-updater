@@ -12,8 +12,9 @@ import (
 type UpdateType string
 
 const (
-	UpdateTypeCore UpdateType = "core"
-	UpdateTypeFile UpdateType = "file"
+	UpdateTypeCore    UpdateType = "core"
+	UpdateTypeFile    UpdateType = "file"
+	UpdateTypePackage UpdateType = "package"
 )
 
 // Task represents one auto-update job.

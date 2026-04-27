@@ -28,9 +28,27 @@ var ghProxies = []string{
 var dlClient = &http.Client{Timeout: 120 * time.Second}
 
 // DownloadFile tries direct download then proxy mirrors.
-// Returns the local temp file path.
+// Returns the local temp file path. The temp file preserves the original
+// filename's extension so that format-detection by suffix works correctly.
 func DownloadFile(rawURL string, logger func(string)) (string, error) {
-	tmp, err := os.CreateTemp("", "updater-dl-*")
+	// Extract the original filename from the URL to keep its extension.
+	origName := filepath.Base(strings.Split(rawURL, "?")[0])
+	ext := ""
+	// Handle compound extensions like .tar.gz / .pkg.tar.zst
+	for _, compound := range []string{
+		".tar.gz", ".tar.xz", ".tar.bz2", ".tar.zst",
+		".tar.lz4", ".tar.lz", ".pkg.tar.zst", ".pkg.tar.xz",
+	} {
+		if strings.HasSuffix(strings.ToLower(origName), compound) {
+			ext = compound
+			break
+		}
+	}
+	if ext == "" {
+		ext = filepath.Ext(origName) // e.g. ".deb", ".rpm", ".zip"
+	}
+
+	tmp, err := os.CreateTemp("", "updater-dl-*"+ext)
 	if err != nil {
 		return "", err
 	}

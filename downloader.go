@@ -92,153 +92,230 @@ func hasPrefix(b []byte, hex string) bool {
 	return len(b) >= len(needle) && bytes.Equal(b[:len(needle)], needle)
 }
 
-// ExtractAndFindBinary extracts the downloaded file and returns the path to
-// the best candidate executable inside it.
-// repoName is used as a hint when multiple executables are present.
-// binaryKeyword, if non-empty, is used to break ties when multiple ELF binaries exist.
-func ExtractAndFindBinary(filePath, repoName, binaryKeyword string, logger func(string)) (string, error) {
-	magic, err := magicBytes(filePath)
-	if err != nil {
-		return "", err
-	}
+// archiveExts lists all file extensions that should be treated as archives
+// and recursively extracted. Order matters for suffix matching (longest first).
+var archiveExts = []string{
+	".tar.gz", ".tar.xz", ".tar.bz2", ".tar.zst", ".tar.lz4", ".tar.lz",
+	".tgz", ".txz", ".tbz2",
+	".tar",
+	".zip",
+	".gz",  // plain gzip (not tar)
+	".xz",  // plain xz (not tar)
+	".bz2", // plain bzip2 (not tar)
+}
 
+// isArchiveName returns true if the filename looks like a known archive.
+func isArchiveName(name string) bool {
+	low := strings.ToLower(name)
+	for _, ext := range archiveExts {
+		if strings.HasSuffix(low, ext) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasNoExtension returns true for files with no dot in the base name,
+// e.g. "sing-box", "frpc", "mihomo" — typical Linux binary names.
+func hasNoExtension(name string) bool {
+	base := filepath.Base(name)
+	return !strings.Contains(base, ".")
+}
+
+// ExtractAndFindBinary extracts the downloaded file (recursively if needed)
+// and returns the path of the ELF binary inside it.
+// repoName / binaryKeyword are used only as tiebreakers when multiple ELFs exist.
+func ExtractAndFindBinary(filePath, repoName, binaryKeyword string, logger func(string)) (string, error) {
 	extractDir, err := os.MkdirTemp("", "updater-extract-*")
 	if err != nil {
 		return "", err
 	}
 
-	switch {
-	case hasPrefix(magic, "504b0304"): // ZIP
-		logger("📦 detected zip archive, extracting...")
-		if err := extractZip(filePath, extractDir); err != nil {
-			return "", fmt.Errorf("unzip: %w", err)
+	// extractOne extracts a single file into dir; returns a list of paths produced.
+	var extractRecursive func(src, dir string, depth int) error
+
+	extractRecursive = func(src, dir string, depth int) error {
+		if depth > 5 {
+			return fmt.Errorf("too many nested archive layers")
 		}
 
-	case hasPrefix(magic, "1f8b"): // gzip / tar.gz
-		logger("📦 detected gzip, extracting...")
-		if err := extractTarGz(filePath, extractDir); err != nil {
-			// maybe plain gzip, not tar
-			out := filepath.Join(extractDir, "binary_file")
-			if err2 := extractGzip(filePath, out); err2 != nil {
-				return "", fmt.Errorf("gzip extract: %w", err)
+		magic, err := magicBytes(src)
+		if err != nil {
+			return err
+		}
+
+		srcName := strings.ToLower(filepath.Base(src))
+
+		switch {
+		case hasPrefix(magic, "504b0304"): // ZIP
+			logger(fmt.Sprintf("📦 [layer %d] zip → extracting %s", depth, filepath.Base(src)))
+			if err := extractZip(src, dir); err != nil {
+				return fmt.Errorf("unzip: %w", err)
+			}
+
+		case hasPrefix(magic, "1f8b"): // gzip
+			logger(fmt.Sprintf("📦 [layer %d] gzip → extracting %s", depth, filepath.Base(src)))
+			// Try tar.gz first; fall back to plain gz
+			if err := extractTarGz(src, dir); err != nil {
+				out := filepath.Join(dir, strings.TrimSuffix(filepath.Base(src), ".gz"))
+				if err2 := extractGzip(src, out); err2 != nil {
+					return fmt.Errorf("gzip extract: %w", err)
+				}
+			}
+
+		case hasPrefix(magic, "fd377a585a00"): // xz
+			logger(fmt.Sprintf("📦 [layer %d] xz → extracting %s", depth, filepath.Base(src)))
+			// Try tar.xz first; fall back to plain xz
+			if err := extractTarXz(src, dir); err != nil {
+				out := filepath.Join(dir, strings.TrimSuffix(filepath.Base(src), ".xz"))
+				f, err2 := os.Open(src)
+				if err2 != nil {
+					return fmt.Errorf("xz open: %w", err2)
+				}
+				xzr, err2 := newXzReader(f)
+				f.Close()
+				if err2 != nil {
+					return fmt.Errorf("xz reader: %w", err2)
+				}
+				outf, err2 := os.Create(out)
+				if err2 != nil {
+					xzr.Close()
+					return err2
+				}
+				_, err2 = io.Copy(outf, xzr)
+				outf.Close()
+				xzr.Close()
+				if err2 != nil {
+					return fmt.Errorf("xz decompress: %w", err2)
+				}
+			}
+
+		case hasPrefix(magic, "425a68"): // bzip2
+			logger(fmt.Sprintf("📦 [layer %d] bzip2 → extracting %s", depth, filepath.Base(src)))
+			if err := extractTarBz2(src, dir); err != nil {
+				return fmt.Errorf("bz2 extract: %w", err)
+			}
+
+		case hasPrefix(magic, "7f454c46"): // ELF — already a binary
+			logger(fmt.Sprintf("🔧 [layer %d] ELF binary: %s", depth, filepath.Base(src)))
+			dest := filepath.Join(dir, filepath.Base(src))
+			return copyFile(src, dest)
+
+		default:
+			// Magic bytes unknown — try to guess from extension
+			switch {
+			case strings.HasSuffix(srcName, ".tar"):
+				logger(fmt.Sprintf("📦 [layer %d] bare tar → %s", depth, filepath.Base(src)))
+				if err := extractTarAuto(src, dir); err != nil {
+					return fmt.Errorf("tar extract: %w", err)
+				}
+			default:
+				logger(fmt.Sprintf("⚠ [layer %d] unknown format, copying as-is: %s", depth, filepath.Base(src)))
+				dest := filepath.Join(dir, filepath.Base(src))
+				return copyFile(src, dest)
 			}
 		}
 
-	case hasPrefix(magic, "fd377a585a00"): // xz / tar.xz
-		logger("📦 detected xz archive, extracting...")
-		if err := extractTarXz(filePath, extractDir); err != nil {
-			return "", fmt.Errorf("xz extract: %w", err)
-		}
-
-	case hasPrefix(magic, "425a68"): // bzip2 / tar.bz2
-		logger("📦 detected bzip2 archive, extracting...")
-		if err := extractTarBz2(filePath, extractDir); err != nil {
-			return "", fmt.Errorf("bz2 extract: %w", err)
-		}
-
-	case hasPrefix(magic, "7f454c46"): // ELF
-		logger("🔧 detected ELF binary directly")
-		dest := filepath.Join(extractDir, "binary_file")
-		if err := copyFile(filePath, dest); err != nil {
-			return "", err
-		}
-
-	default:
-		logger("⚠ unknown format, trying tar then raw copy...")
-		if err := extractTarAuto(filePath, extractDir); err != nil {
-			dest := filepath.Join(extractDir, "binary_file")
-			if err2 := copyFile(filePath, dest); err2 != nil {
-				return "", fmt.Errorf("cannot handle file format")
+		// After extraction, recurse into any archive files that appeared
+		return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() || path == src {
+				return nil
 			}
-		}
+			if isArchiveName(info.Name()) {
+				subDir := filepath.Join(dir, "__sub_"+info.Name())
+				if err := os.MkdirAll(subDir, 0755); err != nil {
+					return err
+				}
+				if err := extractRecursive(path, subDir, depth+1); err != nil {
+					return err
+				}
+				os.Remove(path) // replace archive with its contents
+			}
+			return nil
+		})
+	}
+
+	if err := extractRecursive(filePath, extractDir, 1); err != nil {
+		return "", err
 	}
 
 	return findBinary(extractDir, repoName, binaryKeyword, logger)
 }
 
-// findBinary walks extractDir and picks the best executable candidate.
-// binaryKeyword, if non-empty, is only used as a tiebreaker when multiple ELF binaries exist.
+// findBinary walks dir and picks the ELF binary using this priority:
+//  1. Files with NO extension (classic Linux binary naming) that are ELF
+//  2. Any ELF file (confirmed by magic bytes 7F 45 4C 46)
+//  3. Tiebreak by binaryKeyword match, then repoName match, then largest size
 func findBinary(dir, hint, binaryKeyword string, logger func(string)) (string, error) {
 	type candidate struct {
-		path string
-		size int64
-		prio int // higher = better
+		path      string
+		size      int64
+		noExt     bool // true = no file extension
+		kwMatch   bool // matches binaryKeyword
+		hintMatch bool // matches repoName
 	}
-	var candidates []candidate
+
+	var elfs []candidate // only confirmed ELF files
 
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return nil
 		}
 		magic, _ := magicBytes(path)
-		isELF := hasPrefix(magic, "7f454c46")
-		isExec := info.Mode()&0111 != 0
-
-		prio := 0
-		if isELF {
-			prio += 100
-		}
-		if isExec {
-			prio += 50
+		if !hasPrefix(magic, "7f454c46") {
+			return nil // not ELF, skip
 		}
 		name := strings.ToLower(filepath.Base(path))
-		hintLow := strings.ToLower(hint)
-		if strings.Contains(name, hintLow) {
-			prio += 30
+		c := candidate{
+			path:  path,
+			size:  info.Size(),
+			noExt: hasNoExtension(path),
 		}
-		// penalise docs / metadata
-		for _, ext := range []string{".txt", ".md", ".json", ".yaml", ".yml", ".toml", ".conf", ".sh"} {
-			if strings.HasSuffix(name, ext) {
-				prio -= 200
-			}
+		if binaryKeyword != "" {
+			c.kwMatch = strings.Contains(name, strings.ToLower(binaryKeyword))
 		}
-
-		if prio > -100 {
-			candidates = append(candidates, candidate{path, info.Size(), prio})
+		if hint != "" {
+			c.hintMatch = strings.Contains(name, strings.ToLower(hint))
 		}
+		elfs = append(elfs, c)
 		return nil
 	})
 	if err != nil {
 		return "", err
 	}
-	if len(candidates) == 0 {
-		return "", fmt.Errorf("no files found in extracted archive")
+	if len(elfs) == 0 {
+		return "", fmt.Errorf("no ELF binary found in extracted archive")
 	}
 
-	// sort: higher prio first, then larger size
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].prio != candidates[j].prio {
-			return candidates[i].prio > candidates[j].prio
+	// Sort: noExt > kwMatch > hintMatch > size
+	sort.Slice(elfs, func(i, j int) bool {
+		a, b := elfs[i], elfs[j]
+		if a.noExt != b.noExt {
+			return a.noExt // no-extension wins
 		}
-		return candidates[i].size > candidates[j].size
+		if a.kwMatch != b.kwMatch {
+			return a.kwMatch
+		}
+		if a.hintMatch != b.hintMatch {
+			return a.hintMatch
+		}
+		return a.size > b.size
 	})
 
-	// Count how many top-tier ELF candidates share the same prio as the best
-	bestPrio := candidates[0].prio
-	var elfTies []candidate
-	for _, c := range candidates {
-		magic, _ := magicBytes(c.path)
-		if c.prio == bestPrio && hasPrefix(magic, "7f454c46") {
-			elfTies = append(elfTies, c)
-		}
+	chosen := elfs[0]
+	reason := ""
+	switch {
+	case chosen.kwMatch:
+		reason = fmt.Sprintf("keyword=%q", binaryKeyword)
+	case chosen.hintMatch:
+		reason = fmt.Sprintf("repo name=%q", hint)
+	case chosen.noExt:
+		reason = "no file extension"
+	default:
+		reason = "largest ELF"
 	}
-
-	// Only apply binaryKeyword when there are multiple ELF binaries at the top
-	if binaryKeyword != "" && len(elfTies) > 1 {
-		kwLow := strings.ToLower(binaryKeyword)
-		for _, c := range elfTies {
-			name := strings.ToLower(filepath.Base(c.path))
-			if strings.Contains(name, kwLow) {
-				logger(fmt.Sprintf("🔍 selected binary (by keyword \"%s\"): %s", binaryKeyword, filepath.Base(c.path)))
-				return c.path, nil
-			}
-		}
-		logger(fmt.Sprintf("⚠ binary_keyword \"%s\" matched nothing, falling back to default selection", binaryKeyword))
-	}
-
-	chosen := candidates[0].path
-	logger(fmt.Sprintf("🔍 selected binary: %s", filepath.Base(chosen)))
-	return chosen, nil
+	logger(fmt.Sprintf("🔍 selected binary: %s  (reason: %s)", filepath.Base(chosen.path), reason))
+	return chosen.path, nil
 }
 
 // ---- archive helpers ----

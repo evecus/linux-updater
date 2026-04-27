@@ -115,29 +115,77 @@ func semverCompare(a, b string) (bIsNewer bool, err error) {
 }
 
 // BestAsset picks the release asset whose name best matches the keyword(s).
-// Keywords are space-separated; scoring is based on how many keyword tokens
-// appear in the filename (case-insensitive), weighted by token length.
+//
+// Matching rules (applied in order):
+//  1. Prefer assets that contain ALL keyword tokens (full-match group).
+//     If no asset matches all tokens, fall back to partial matches.
+//  2. Within the same group, prefer the asset with the SHORTEST filename
+//     (fewest extra characters / fields beyond the matched tokens).
+//  3. On equal length, prefer the asset whose matched-token character count
+//     is highest (more of the filename is explained by the keywords).
 func BestAsset(assets []GHAsset, keyword string) *GHAsset {
 	if len(assets) == 0 {
 		return nil
 	}
 	tokens := strings.Fields(strings.ToLower(keyword))
+	if len(tokens) == 0 {
+		return &assets[0]
+	}
 
-	bestScore := -1
-	var best *GHAsset
+	type candidate struct {
+		asset      *GHAsset
+		matchedLen int
+		allMatch   bool
+	}
 
+	var candidates []candidate
 	for i := range assets {
 		a := &assets[i]
 		name := strings.ToLower(a.Name)
-		score := 0
+		matched := 0
+		all := true
 		for _, tok := range tokens {
 			if strings.Contains(name, tok) {
-				score += len(tok) // longer token match = higher weight
+				matched += len(tok)
+			} else {
+				all = false
 			}
 		}
-		if score > bestScore {
-			bestScore = score
-			best = a
+		if matched > 0 {
+			candidates = append(candidates, candidate{a, matched, all})
+		}
+	}
+
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	// Determine whether any candidate matches all tokens.
+	hasFullMatch := false
+	for _, c := range candidates {
+		if c.allMatch {
+			hasFullMatch = true
+			break
+		}
+	}
+
+	// Keep only the best group (full-match preferred over partial).
+	var best *GHAsset
+	bestNameLen := -1
+	bestMatchedLen := -1
+
+	for _, c := range candidates {
+		if hasFullMatch && !c.allMatch {
+			continue
+		}
+		nameLen := len(c.asset.Name)
+		// Prefer shorter filename; break ties by more matched characters.
+		if best == nil ||
+			nameLen < bestNameLen ||
+			(nameLen == bestNameLen && c.matchedLen > bestMatchedLen) {
+			best = c.asset
+			bestNameLen = nameLen
+			bestMatchedLen = c.matchedLen
 		}
 	}
 	return best
